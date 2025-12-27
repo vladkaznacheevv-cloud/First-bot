@@ -13,17 +13,38 @@ logging.basicConfig(
     datefmt='%Y-%m-%d %H:%M:%S',
     encoding='utf-8')
 
-from telegram import Update
+from telegram import Update, BotCommand
 from telegram.ext import Application, CommandHandler, ContextTypes
-
-logging.info('Bot Let drink!')
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     print(f'Запрос /start от пользователя: {user.full_name} (ID: {user.id})')
     logging.info(f'Пользователь {user.full_name} (ID: {user.id})нажал /start')
-    await update.message.reply_text("Привет! Хочешь прибухнуть с Гремом?")
+    
+    welcome_text = (
+        f"👋Привет, <b>{user.first_name}</b>!\n\n"
+        "🤖 Я — <b>Грем</b>, бот помошник 'Кожанного повелителя'.\n"
+        "🍺 Готов записать тебя на прибухнуть или просто поболтать.\n\n"
+        "Выбери команду из меню — и погнали!"
+    )
+    await update.message.reply_text(welcome_text, parse_mode='HTML')
 
-app = Application.builder().token(settings.API_KEY).build()
+async def post_init(application):
+    await application.bot.set_my_commands([
+    BotCommand("start","Запустить бота🚀"),
+    BotCommand("help","Помощьℹ️"),
+    BotCommand("drink","Записать на прибухнуть🍻"),    
+    ])
+    logging.info("Меню команд установлено")
+
+logging.info('Bot Let drink!')
+
+app = (
+Application.builder()
+    .token(settings.API_KEY)
+    .post_init(post_init)
+    .build()
+)
+
 app.add_handler(CommandHandler("start", start))
 app.run_polling()
