@@ -1,10 +1,10 @@
 import logging
 import os
-import httpx
 import settings
+from openai import AsyncOpenAI
 from collections import defaultdict
 from telegram import Update, BotCommand, InlineKeyboardMarkup, InlineKeyboardButton
-from telegram.ext import Application, CommandHandler, ContextTypes, CallbackQueryHandler
+from telegram.ext import Application, CommandHandler, ContextTypes, CallbackQueryHandler, MessageHandler, filters
 
 log_file = os.path.join(os.path.dirname(__file__),'bot.log')
 
@@ -19,39 +19,41 @@ logging.basicConfig(
     encoding='utf-8'
     )
 
+client = AsyncOpenAI(
+    api_key=settings.MIMO_API_KEY,
+    base_url="https://api.xiaomimimo.com/v1"
+    )
+
 user_conversations = defaultdict(lambda: [
     {"role": "system", "content": (
-        "Ты - ГремБот,харизматичный и дружелюбный бот-компаньон Кожаного повелителя."
-        "Твоя задача — убедить собеседника записаться на прибухнуть. "
+        "Ты - ГремБот, харизматичный и дружелюбный бот-компаньон Кожаного повелителя."
+        "Твоя задача — убедить собеседника записаться на прибухнуть. /drink "
     )}
 ])
 
 async def ask_ai(messages: list) -> str:
     try:
-        async with httpx.AsyncClient() as client:
-            response = await client.post(
-                url= "https://openrouter.ai/api/v1/chat/completions",
-                headers={
-                    "Authorization": f"Bearer {settings.OPENROUTER_API_KEY}",
-                    "Content-Type": "application/json"
-                },
-                json={
-                    "model": "google/gemma-2-2b-it:free",
-                    "messages": messages,
-                    "max_tokens": 250,
-                    "temperature": 0.7
-                },
-                timeout=30.0
-            )
-            if response.status_code == 200:
-                data = response.json()
-                return data["choices"][0]["message"]["content"].strip()
-            else:
-                logging.error(f"OpenRouter error: {response.status_code} - {response.text}")
-                return "Извини, я бухой. Попробуй позже."
+        logging.info("Отправляю запрос к MiMo API...")
+
+        completion = await client.chat.completions.create(
+            model="mimo-v2-flash",
+            messages=messages,
+            max_completion_tokens=1024,
+            temperature=0.3,
+            top_p=0.95,
+            stream=False,
+            frequency_penalty=0,
+            presence_penalty=0,
+            extra_body={
+                "thinking": {"type": "disabled"}
+            }
+        )
+
+        return completion.choices[0].message.content.strip()
+    
     except Exception as e:
         logging.error(f"Ошибка ИИ: {e}")
-        return "Кожаный повелитель уже бежит!"
+        return "Кожаный повелитель уже в пути! 🏍️"
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
@@ -124,6 +126,24 @@ async def talk_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(ai_response, reply_markup=reply_markup)
     logging.info(f"Пользователь {user.id} в диалоге: {user_message[:30]}...")
 
+async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    user_id = user.id
+
+    if len(user_conversations[user_id]) > 1:
+        user_message = update.message.text.strip()
+        if not user_message:
+            return
+
+        user_conversations[user_id].append({"role": "user", "content": user_message})
+
+        await update.message.chat.send_action(action="typing")
+        ai_response = await ask_ai(user_conversations[user_id])
+        user_conversations[user_id].append({"role": "assistant", "content": ai_response})
+
+        await update.message.reply_text(ai_response)
+        logging.info(f"Диалог с {user.id}: '{user_message[:30]}...'")
+
 async def reset_dialog_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -160,4 +180,5 @@ if __name__ == "__main__":
     app.add_handler(CommandHandler("talk", talk_command) )
     app.add_handler(CallbackQueryHandler(reset_dialog_callback, pattern="^reset_dialog$"))
     app.add_handler(CommandHandler("reset", reset_command))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     app.run_polling()
